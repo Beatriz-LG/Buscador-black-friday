@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 import requests
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
@@ -15,11 +16,8 @@ app.add_middleware(
 )
 
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
-
-# Cache simples para não consultar a mesma loja duas vezes na mesma busca
 cache_reputacao = {}
 
-# Lojas gigantes já amplamente verificadas (evita lentidão desnecessária)
 LOJAS_CONHECIDAS = {
     "amazon": {"nota": "8.4 / 10", "selo": "Ótimo (Verificada)", "confiavel": True},
     "magazine luiza": {"nota": "8.2 / 10", "selo": "RA1000 / Ótimo", "confiavel": True},
@@ -38,19 +36,28 @@ LOJAS_CONHECIDAS = {
     "lg": {"nota": "8.2 / 10", "selo": "Loja Oficial", "confiavel": True},
 }
 
+PALAVRAS_BLOQUEADAS = [
+    "ima ", "imas ", "ímã", "ímãs", "adesivo", "envelopamento", "capa ",
+    "suporte", "borracha", "gaxeta", "prateleira", "gaveta", "termostato",
+    "sensor", "placa ", "motor ", "compressor", "puxador", "dobradica",
+    "dobradiça", "peca ", "peça ", "filtro ", "lampada", "lâmpada", "mini "
+]
+
+def normalizar(texto: str) -> str:
+    nfkd = unicodedata.normalize('NFKD', texto.lower())
+    return "".join([c for c in nfkd if not unicodedata.combining(c)])
+
 def consultar_reclame_aqui(nome_loja: str):
     chave = nome_loja.lower().strip()
     if chave in cache_reputacao:
         return cache_reputacao[chave]
 
-    # Verifica se é uma das grandes varejistas conhecidas
     for conhecida, dados in LOJAS_CONHECIDAS.items():
         if conhecida in chave:
             res = {**dados, "link_ra": f"https://www.reclameaqui.com.br/busca/?q={requests.utils.quote(nome_loja)}"}
             cache_reputacao[chave] = res
             return res
 
-    # Consulta via Google Search (SerpApi) os dados públicos da página da loja no Reclame Aqui
     try:
         params = {
             "engine": "google",
@@ -68,11 +75,9 @@ def consultar_reclame_aqui(nome_loja: str):
             snippet = resultados[0].get("snippet", "") + " " + resultados[0].get("title", "")
             link_ra = resultados[0].get("link", f"https://www.reclameaqui.com.br/busca/?q={requests.utils.quote(nome_loja)}")
 
-            # Tenta extrair nota (ex: 8.5/10 ou Nota 8,4)
             match_nota = re.search(r'(\d+[.,]\d+)\s*/\s*10', snippet)
             nota = f"{match_nota.group(1).replace(',', '.')} / 10" if match_nota else "Sem nota definida"
 
-            # Tenta identificar selo
             selo = "Regular / Verificar"
             confiavel = False
             snippet_lower = snippet.lower()
@@ -126,12 +131,22 @@ def buscar_ofertas(
     produto: str = Query(...),
     marca: str = Query(""),
     modelo: str = Query(""),
-    detalhes: str = Query("")
+    detalhes: str = Query(""),
+    preco_min: float = Query(0.0)
 ):
     if not SERPAPI_KEY:
         return {"erro": "Chave SERPAPI_KEY não configurada no servidor."}
 
-    termo_busca = f"{produto} {marca} {modelo} {detalhes}".strip()
+    # Monta a busca reforçando o produto principal entre aspas para evitar itens aleatórios
+    partes = [f'"{produto.strip()}"']
+    if marca.strip():
+        partes.append(marca.strip())
+    if modelo.strip():
+        partes.append(modelo.strip())
+    if detalhes.strip():
+        partes.append(detalhes.strip())
+
+    termo_busca = " ".join(partes)
 
     params = {
         "engine": "google_shopping",
@@ -139,7 +154,7 @@ def buscar_ofertas(
         "gl": "br",
         "hl": "pt",
         "currency": "BRL",
-        "num": 20,
+        "num": 40,
         "api_key": SERPAPI_KEY
     }
 
@@ -152,29 +167,48 @@ def buscar_ofertas(
     itens_brutos = dados.get("shopping_results", [])
     ofertas = []
 
+    palavra_chave_norm = normalizar(produto.strip().split()[0])
+    marca_norm = normalizar(marca.strip()) if marca.strip() else ""
+
     for item in itens_brutos:
+        titulo = item.get("title", "")
+        titulo_norm = " " + normalizar(titulo) + " "
+
+        # 1. Ignora resultados que não tenham a palavra principal do eletrodoméstico no título
+        if palavra_chave_norm not in titulo_norm:
+            continue
+
+        # 2. Se o usuário informou marca, exige que a marca esteja no título
+        if marca_norm and marca_norm not in titulo_norm:
+            continue
+
+        # 3. Ignora acessórios e peças (ímãs, adesivos, borrachas, etc.)
+        if any(normalizar(bloq) in titulo_norm for bloq in PALAVRAS_BLOQUEADAS):
+            continue
+
         preco_texto = item.get("price", "")
         valor_num = item.get("extracted_price") or limpar_preco(preco_texto)
+
+        # 4. Aplica filtro de preço mínimo para eliminar acessórios baratos
+        if not valor_num or valor_num >= 999999 or valor_num < preco_min:
+            continue
+
         loja = item.get("source", "Loja desconhecida")
         link = item.get("link") or item.get("product_link", "#")
-        titulo = item.get("title", termo_busca)
         imagem = item.get("thumbnail", "")
 
-        if valor_num and valor_num < 999999:
-            ofertas.append({
-                "titulo": titulo,
-                "loja": loja,
-                "preco_texto": preco_texto if preco_texto else f"R$ {valor_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                "valor_num": float(valor_num),
-                "link": link,
-                "imagem": imagem
-            })
+        ofertas.append({
+            "titulo": titulo,
+            "loja": loja,
+            "preco_texto": preco_texto if preco_texto else f"R$ {valor_num:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            "valor_num": float(valor_num),
+            "link": link,
+            "imagem": imagem
+        })
 
-    # Ordena do menor para o maior preço
     ofertas.sort(key=lambda x: x["valor_num"])
 
-    # Pega as 8 ofertas mais baratas e verifica a reputação no Reclame Aqui
-    top_ofertas = ofertas[:8]
+    top_ofertas = ofertas[:10]
     for oferta in top_ofertas:
         oferta["reputacao"] = consultar_reclame_aqui(oferta["loja"])
 
