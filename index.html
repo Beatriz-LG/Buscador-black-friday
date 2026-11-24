@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caça-Ofertas & Reputação</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen pb-10">
+
+    <!-- Cabeçalho -->
+    <header class="bg-indigo-700 text-white p-4 shadow-md sticky top-0 z-10">
+        <div class="max-w-xl mx-auto flex items-center justify-between">
+            <div>
+                <h1 class="text-lg font-bold tracking-tight">Buscador Black Friday</h1>
+                <p class="text-xs text-indigo-200">Menor preço + Nota no Reclame Aqui</p>
+            </div>
+            <span class="bg-indigo-900 text-xs px-2.5 py-1 rounded-full font-medium">Tempo Real</span>
+        </div>
+    </header>
+
+    <main class="max-w-xl mx-auto p-4">
+        <!-- Formulário de Busca -->
+        <form id="formBusca" class="bg-white rounded-2xl shadow-sm p-4 space-y-3 border border-slate-200">
+            <div>
+                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Eletrodoméstico *</label>
+                <input type="text" id="produto" required placeholder="Ex: Geladeira Frost Free, Lava e Seca..."
+                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm">
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Marca</label>
+                    <input type="text" id="marca" placeholder="Ex: Brastemp, LG"
+                        class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Modelo</label>
+                    <input type="text" id="modelo" placeholder="Ex: BRM44HB"
+                        class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Outras Descrições</label>
+                <input type="text" id="detalhes" placeholder="Ex: 110v, Inox, 375 Litros"
+                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm">
+            </div>
+
+            <div class="flex items-center gap-2 pt-1">
+                <input type="checkbox" id="apenasConfiaveis" class="w-4 h-4 text-indigo-600 rounded">
+                <label for="apenasConfiaveis" class="text-xs text-slate-600 font-medium">
+                    Destacar/priorizar apenas lojas bem avaliadas no Reclame Aqui
+                </label>
+            </div>
+
+            <button type="submit" id="btnBuscar"
+                class="w-full bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-bold py-3 rounded-xl shadow transition text-sm">
+                Buscar Melhores Preços Agora
+            </button>
+        </form>
+
+        <!-- Área de Carregamento -->
+        <div id="loading" class="hidden text-center py-10 space-y-3">
+            <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-indigo-600 border-t-transparent"></div>
+            <p class="text-sm font-medium text-slate-600">Varrendo lojas e checando Reclame Aqui...</p>
+            <p class="text-xs text-slate-400">Isso leva cerca de 5 a 10 segundos.</p>
+        </div>
+
+        <!-- Mensagem de Erro -->
+        <div id="erroBox" class="hidden mt-4 bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-sm"></div>
+
+        <!-- Lista de Resultados -->
+        <div id="resultados" class="mt-5 space-y-3"></div>
+    </main>
+
+    <script>
+        const form = document.getElementById('formBusca');
+        const loading = document.getElementById('loading');
+        const resultadosDiv = document.getElementById('resultados');
+        const erroBox = document.getElementById('erroBox');
+        const btnBuscar = document.getElementById('btnBuscar');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            resultadosDiv.innerHTML = '';
+            erroBox.classList.add('hidden');
+            loading.classList.remove('hidden');
+            btnBuscar.disabled = true;
+            btnBuscar.classList.add('opacity-50');
+
+            const params = new URLSearchParams({
+                produto: document.getElementById('produto').value,
+                marca: document.getElementById('marca').value,
+                modelo: document.getElementById('modelo').value,
+                detalhes: document.getElementById('detalhes').value
+            });
+
+            try {
+                const response = await fetch(`/api/buscar?${params.toString()}`);
+                const data = await response.json();
+
+                if (data.erro) {
+                    throw new Error(data.erro);
+                }
+
+                let lista = data.resultados || [];
+                const filtrarConfiaveis = document.getElementById('apenasConfiaveis').checked;
+
+                if (filtrarConfiaveis) {
+                    lista.sort((a, b) => (b.reputacao.confiavel === a.reputacao.confiavel) ? 0 : b.reputacao.confiavel ? 1 : -1);
+                }
+
+                if (lista.length === 0) {
+                    resultadosDiv.innerHTML = '<p class="text-center text-sm text-slate-500 py-6">Nenhuma oferta encontrada com esses termos exatos. Tente remover o código do modelo.</p>';
+                    return;
+                }
+
+                lista.forEach((item, index) => {
+                    const rep = item.reputacao;
+                    const badgeCor = rep.confiavel 
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-200' 
+                        : 'bg-amber-100 text-amber-800 border-amber-200';
+                    const iconeStatus = rep.confiavel ? '✅' : '⚠️';
+
+                    const card = `
+                        <div class="bg-white rounded-2xl p-4 shadow-sm border ${index === 0 ? 'border-indigo-400 ring-1 ring-indigo-400' : 'border-slate-200'}">
+                            <div class="flex gap-3">
+                                ${item.imagem ? `<img src="${item.imagem}" alt="Produto" class="w-20 h-20 object-contain rounded-lg bg-white border border-slate-100 p-1 shrink-0">` : ''}
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="text-xs font-bold uppercase tracking-wider text-indigo-600 truncate">${item.loja}</span>
+                                        ${index === 0 ? '<span class="bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0">MENOR PREÇO</span>' : ''}
+                                    </div>
+                                    <h2 class="text-xs text-slate-600 line-clamp-2 mt-0.5">${item.titulo}</h2>
+                                    <p class="text-xl font-extrabold text-slate-900 mt-1.5">${item.preco_texto}</p>
+                                </div>
+                            </div>
+
+                            <!-- Bloco Reclame Aqui -->
+                            <div class="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+                                <div class="text-xs px-2.5 py-1 rounded-lg border ${badgeCor} font-medium">
+                                    ${iconeStatus} Reclame Aqui: <strong>${rep.selo}</strong> (${rep.nota})
+                                </div>
+                                <a href="${rep.link_ra}" target="_blank" class="text-[11px] text-slate-500 underline hover:text-indigo-600">
+                                    Ver perfil RA
+                                </a>
+                            </div>
+
+                            <!-- Botão Ir para Loja -->
+                            <a href="${item.link}" target="_blank" rel="noopener noreferrer"
+                               class="mt-3 block w-full text-center bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold py-2.5 rounded-xl transition">
+                                Ir para a Loja ↗
+                            </a>
+                        </div>
+                    `;
+                    resultadosDiv.innerHTML += card;
+                });
+
+            } catch (err) {
+                erroBox.textContent = "Erro na busca: " + err.message;
+                erroBox.classList.remove('hidden');
+            } finally {
+                loading.classList.add('hidden');
+                btnBuscar.disabled = false;
+                btnBuscar.classList.remove('opacity-50');
+            }
+        });
+    </script>
+</body>
+</html>
